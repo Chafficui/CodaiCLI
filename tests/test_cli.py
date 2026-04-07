@@ -4,7 +4,7 @@ import pytest
 from unittest.mock import patch, MagicMock, AsyncMock
 from click.testing import CliRunner
 
-from codaicli.cli import cli, configure
+from codaicli.cli import cli, configure, index
 
 
 @pytest.fixture
@@ -186,3 +186,25 @@ class TestInteractiveMode:
 
             await _interactive_mode()
             mock_agent.run.assert_called_once_with("what does main.py do")
+
+
+class TestIndexCommand:
+    @patch("codaicli.cli.Config")
+    @patch("codaicli.cli.Console")
+    def test_index_command(self, mock_console_class, mock_config_class, runner):
+        mock_config = MagicMock()
+        mock_config_class.return_value = mock_config
+        mock_config.get.return_value = None
+        mock_console_class.return_value = MagicMock()
+
+        with (
+            patch("codaicli.knowledge.store.KnowledgeStore"),
+            patch("codaicli.knowledge.indexer.KnowledgeIndexer") as mock_indexer_class,
+            patch("codaicli.provider.Provider"),
+        ):
+            mock_indexer = MagicMock()
+            mock_indexer.index_project = AsyncMock()
+            mock_indexer_class.return_value = mock_indexer
+
+            result = runner.invoke(index)
+            assert result.exit_code == 0

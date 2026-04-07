@@ -33,6 +33,8 @@ class Agent:
         provider: Provider,
         tool_registry: ToolRegistry,
         mcp_manager: MCPManager | None = None,
+        knowledge_retriever: Any | None = None,
+        knowledge_store: Any | None = None,
         on_text: Callable[[str], None] | None = None,
         on_tool_call: Callable[[ToolCall], None] | None = None,
         on_tool_result: Callable[[ToolResult], None] | None = None,
@@ -42,6 +44,8 @@ class Agent:
         self.provider = provider
         self.tools = tool_registry
         self.mcp = mcp_manager
+        self.knowledge_retriever = knowledge_retriever
+        self.knowledge_store = knowledge_store
         self.history: list[dict[str, Any]] = []
         self.max_iterations = max_iterations
 
@@ -58,6 +62,15 @@ class Agent:
         confirmation for destructive tools. Returns the final text response.
         """
         self.history.append({"role": "user", "content": user_message})
+
+        # Inject knowledge context into system prompt
+        system_prompt = self.SYSTEM_PROMPT
+        if self.knowledge_retriever:
+            knowledge_ctx = self.knowledge_retriever.get_context(
+                user_message, max_tokens=2000
+            )
+            if knowledge_ctx:
+                system_prompt += "\n\n## Project Knowledge\n" + knowledge_ctx
 
         # Merge built-in + MCP tools
         all_tools = self.tools.get_litellm_tools()
@@ -79,7 +92,9 @@ class Agent:
 
         for _iteration in range(self.max_iterations):
             # Stream the response
-            assistant_msg, tool_calls, text = await self._stream_response(all_tools)
+            assistant_msg, tool_calls, text = await self._stream_response(
+                all_tools, system_prompt
+            )
 
             if text:
                 final_text = text
@@ -101,7 +116,7 @@ class Agent:
         return final_text
 
     async def _stream_response(
-        self, tools: list[dict]
+        self, tools: list[dict], system_prompt: str = ""
     ) -> tuple[dict, list[ToolCall], str]:
         """Stream a provider response, forwarding text to callback.
 
@@ -114,7 +129,7 @@ class Agent:
         async for event in self.provider.stream(
             messages=self.history,
             tools=tools,
-            system_prompt=self.SYSTEM_PROMPT,
+            system_prompt=system_prompt or self.SYSTEM_PROMPT,
         ):
             if event.type == "text" and event.text:
                 text_parts.append(event.text)
@@ -189,6 +204,15 @@ class Agent:
 
             result.tool_call_id = tc.id
             self._on_tool_result(result)
+
+            # Track file modifications for knowledge staleness
+            if (
+                tc.name in ("write_file", "edit_file", "delete_file")
+                and self.knowledge_store
+            ):
+                filepath = tc.arguments.get("path", "")
+                if filepath:
+                    self.knowledge_store.mark_stale_by_file(filepath)
 
             result_messages.append(
                 {

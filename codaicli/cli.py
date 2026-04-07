@@ -26,6 +26,13 @@ def cli(ctx):
 
 
 @cli.command()
+@click.option("--full", is_flag=True, help="Force full re-index (ignore cache)")
+def index(full):
+    """Generate or refresh the project knowledge base."""
+    asyncio.run(_index_project(full))
+
+
+@cli.command()
 @click.option("--view", is_flag=True, help="View current configuration")
 @click.option("--reset", is_flag=True, help="Reset configuration to defaults")
 def configure(view, reset):
@@ -162,6 +169,41 @@ def _configure_advanced(console: Console, config: Config):
         console.print("[yellow]Invalid value, keeping current.[/yellow]")
 
 
+async def _index_project(full: bool = False):
+    """Generate or refresh the project knowledge base."""
+    console = Console()
+    config = Config()
+
+    project_path = os.getcwd()
+    model = config.get("model", "anthropic/claude-sonnet-4-20250514")
+
+    from codaicli.knowledge.indexer import KnowledgeIndexer
+    from codaicli.knowledge.store import KnowledgeStore
+    from codaicli.provider import Provider
+
+    provider = Provider(
+        model=model,
+        api_key=config.get("api_key"),
+        api_base=config.get("api_base"),
+        temperature=config.get("temperature", 0.2),
+        max_tokens=config.get("max_tokens", 4096),
+    )
+
+    db_path = os.path.join(project_path, ".codaicli", "knowledge.db")
+    store = KnowledgeStore(db_path)
+    indexer = KnowledgeIndexer(provider, store, project_path)
+
+    def on_progress(msg: str):
+        console.print(f"  [dim]{msg}[/dim]")
+
+    console.print("[bold blue]Indexing project knowledge...[/bold blue]")
+    if full:
+        await indexer.index_project(force=True, on_progress=on_progress)
+    else:
+        await indexer.index_project(force=False, on_progress=on_progress)
+    console.print("[green]Knowledge base updated.[/green]")
+
+
 async def _interactive_mode():
     """Async main interactive loop."""
     ui = UI()
@@ -173,11 +215,27 @@ async def _interactive_mode():
     model = config.get("model", "anthropic/claude-sonnet-4-20250514")
 
     from codaicli.file_manager import FileManager
+    from codaicli.knowledge.retriever import KnowledgeRetriever
+    from codaicli.knowledge.store import KnowledgeStore
     from codaicli.provider import Provider
     from codaicli.tools import ToolRegistry
 
     file_manager = FileManager(project_path)
-    tool_registry = ToolRegistry(file_manager, project_path)
+
+    # Knowledge base (optional — works without indexing)
+    db_path = os.path.join(project_path, ".codaicli", "knowledge.db")
+    knowledge_store = KnowledgeStore(db_path)
+    knowledge_retriever = KnowledgeRetriever(knowledge_store)
+
+    # Lazy import indexer only when needed
+    knowledge_indexer = None
+
+    tool_registry = ToolRegistry(
+        file_manager,
+        project_path,
+        knowledge_retriever=knowledge_retriever,
+        knowledge_indexer=None,  # Initialized lazily on 'index' command
+    )
 
     provider = Provider(
         model=model,
@@ -209,6 +267,8 @@ async def _interactive_mode():
         provider=provider,
         tool_registry=tool_registry,
         mcp_manager=mcp_manager,
+        knowledge_retriever=knowledge_retriever,
+        knowledge_store=knowledge_store,
         on_text=ui.stream_text,
         on_tool_call=ui.show_tool_call,
         on_tool_result=ui.show_tool_result,
@@ -241,6 +301,21 @@ async def _interactive_mode():
             if lower == "new":
                 agent.clear_history()
                 ui.console.print("[green]Conversation cleared.[/green]")
+                continue
+
+            if lower == "index":
+                from codaicli.knowledge.indexer import KnowledgeIndexer
+
+                if knowledge_indexer is None:
+                    knowledge_indexer = KnowledgeIndexer(
+                        provider, knowledge_store, project_path
+                    )
+                    tool_registry.knowledge_indexer = knowledge_indexer
+                ui.console.print("[dim]Refreshing knowledge base...[/dim]")
+                await knowledge_indexer.index_project(
+                    on_progress=lambda msg: ui.console.print(f"  [dim]{msg}[/dim]")
+                )
+                ui.console.print("[green]Knowledge base updated.[/green]")
                 continue
 
             if lower.startswith("model "):

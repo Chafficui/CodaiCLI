@@ -182,6 +182,50 @@ class TestAgentMCP:
         mock_tools.execute.assert_not_called()
 
 
+class TestKnowledgeIntegration:
+    @pytest.mark.asyncio
+    async def test_knowledge_context_injection(self, mock_tools):
+        """Agent should inject knowledge context into system prompt."""
+        from unittest.mock import MagicMock
+
+        mock_retriever = MagicMock()
+        mock_retriever.get_context.return_value = "### Overview\nThis is a test project."
+
+        provider = MockProvider([("Hello", [])])
+        agent = Agent(
+            provider=provider,
+            tool_registry=mock_tools,
+            knowledge_retriever=mock_retriever,
+        )
+        await agent.run("what does this project do?")
+
+        mock_retriever.get_context.assert_called_once_with(
+            "what does this project do?", max_tokens=2000
+        )
+
+    @pytest.mark.asyncio
+    async def test_staleness_tracking(self, mock_tools):
+        """Agent should mark knowledge stale when files are modified."""
+        from unittest.mock import MagicMock
+
+        mock_store = MagicMock()
+
+        tc = ToolCall(id="1", name="write_file", arguments={"path": "test.py", "content": "x"})
+        provider = MockProvider([
+            ("Writing file.", [tc]),
+            ("Done.", []),
+        ])
+
+        agent = Agent(
+            provider=provider,
+            tool_registry=mock_tools,
+            knowledge_store=mock_store,
+        )
+        await agent.run("write test.py")
+
+        mock_store.mark_stale_by_file.assert_called_once_with("test.py")
+
+
 class TestHistoryManagement:
     @pytest.mark.asyncio
     async def test_clear_history(self, mock_tools):

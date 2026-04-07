@@ -227,6 +227,8 @@ class TestToolRegistry:
         assert "search_files" in names
         assert "run_command" in names
         assert "delete_file" in names
+        assert "search_knowledge" in names
+        assert "update_knowledge" in names
 
     def test_get_litellm_tools(self, registry):
         tools = registry.get_litellm_tools()
@@ -237,6 +239,8 @@ class TestToolRegistry:
         assert not registry.is_destructive("read_file")
         assert not registry.is_destructive("list_files")
         assert not registry.is_destructive("search_files")
+        assert not registry.is_destructive("search_knowledge")
+        assert not registry.is_destructive("update_knowledge")
         assert registry.is_destructive("write_file")
         assert registry.is_destructive("edit_file")
         assert registry.is_destructive("run_command")
@@ -247,3 +251,53 @@ class TestToolRegistry:
         result = await registry.execute("nonexistent_tool", {})
         assert result.is_error
         assert "Unknown tool" in result.content
+
+
+class TestSearchKnowledge:
+    @pytest.mark.asyncio
+    async def test_no_retriever(self, registry):
+        result = await registry.execute("search_knowledge", {"query": "test"})
+        assert "not initialized" in result.content.lower()
+
+    @pytest.mark.asyncio
+    async def test_with_retriever(self, project):
+        from unittest.mock import AsyncMock, MagicMock
+
+        from codaicli.knowledge.types import KnowledgeEntry
+
+        mock_retriever = MagicMock()
+        mock_retriever.search = AsyncMock(return_value=[
+            KnowledgeEntry(
+                id="1", category="module", title="Auth Module",
+                content="Handles authentication.", scope="auth.py",
+            )
+        ])
+
+        fm = FileManager(str(project))
+        registry = ToolRegistry(fm, str(project), knowledge_retriever=mock_retriever)
+
+        result = await registry.execute("search_knowledge", {"query": "auth"})
+        assert not result.is_error
+        assert "Auth Module" in result.content
+
+
+class TestUpdateKnowledge:
+    @pytest.mark.asyncio
+    async def test_no_indexer(self, registry):
+        result = await registry.execute("update_knowledge", {})
+        assert "not initialized" in result.content.lower()
+
+    @pytest.mark.asyncio
+    async def test_with_indexer(self, project):
+        from unittest.mock import AsyncMock, MagicMock
+
+        mock_indexer = MagicMock()
+        mock_indexer.refresh_stale = AsyncMock()
+
+        fm = FileManager(str(project))
+        registry = ToolRegistry(fm, str(project), knowledge_indexer=mock_indexer)
+
+        result = await registry.execute("update_knowledge", {})
+        assert not result.is_error
+        assert "refreshed" in result.content.lower()
+        mock_indexer.refresh_stale.assert_called_once()

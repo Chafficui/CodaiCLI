@@ -18,9 +18,17 @@ from codaicli.types import ToolDefinition, ToolResult
 class ToolRegistry:
     """Manages built-in tools and their execution."""
 
-    def __init__(self, file_manager: FileManager, project_path: str):
+    def __init__(
+        self,
+        file_manager: FileManager,
+        project_path: str,
+        knowledge_retriever: Any | None = None,
+        knowledge_indexer: Any | None = None,
+    ):
         self.file_manager = file_manager
         self.project_path = Path(project_path).resolve()
+        self.knowledge_retriever = knowledge_retriever
+        self.knowledge_indexer = knowledge_indexer
         self._tools: dict[str, tuple[ToolDefinition, Callable[..., str]]] = {}
         self._register_builtins()
 
@@ -53,7 +61,7 @@ class ToolRegistry:
         return True  # Unknown tools default to destructive
 
     async def execute(self, name: str, arguments: dict[str, Any]) -> ToolResult:
-        """Execute a tool by name. Runs in a thread to avoid blocking."""
+        """Execute a tool by name. Runs sync handlers in a thread."""
         if name not in self._tools:
             return ToolResult(
                 tool_call_id="",
@@ -63,7 +71,10 @@ class ToolRegistry:
             )
         _, handler = self._tools[name]
         try:
-            result = await asyncio.to_thread(handler, **arguments)
+            if asyncio.iscoroutinefunction(handler):
+                result = await handler(**arguments)
+            else:
+                result = await asyncio.to_thread(handler, **arguments)
             return ToolResult(tool_call_id="", name=name, content=result)
         except Exception as e:
             return ToolResult(
@@ -269,6 +280,48 @@ class ToolRegistry:
                 is_destructive=True,
             ),
             self._delete_file,
+        )
+
+        self.register(
+            ToolDefinition(
+                name="search_knowledge",
+                description=(
+                    "Search the project knowledge base for relevant documentation. "
+                    "The knowledge base contains LLM-generated summaries of modules, "
+                    "architecture, and patterns. Use this to understand the project "
+                    "without reading every file."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "Search query describing what you want to know about the project",
+                        },
+                    },
+                    "required": ["query"],
+                },
+                is_destructive=False,
+            ),
+            self._search_knowledge,
+        )
+
+        self.register(
+            ToolDefinition(
+                name="update_knowledge",
+                description=(
+                    "Refresh stale entries in the project knowledge base. "
+                    "Call this after making significant changes to keep the "
+                    "knowledge base up to date."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {},
+                    "required": [],
+                },
+                is_destructive=False,
+            ),
+            self._update_knowledge,
         )
 
     def _read_file(self, path: str, offset: int = 1, limit: int = 500) -> str:
@@ -488,3 +541,23 @@ class ToolRegistry:
             raise FileNotFoundError(f"File not found: {path}")
         self.file_manager.delete_file(path)
         return f"Deleted: {path}"
+
+    async def _search_knowledge(self, query: str) -> str:
+        if self.knowledge_retriever is None:
+            return "Knowledge base not initialized. Run 'codaicli index' first."
+
+        entries = await self.knowledge_retriever.search(query, top_k=5)
+        if not entries:
+            return "No relevant knowledge found. Try a different query or run 'codaicli index'."
+
+        parts = []
+        for entry in entries:
+            parts.append(f"## {entry.title} ({entry.category})\n{entry.content}")
+        return "\n\n---\n\n".join(parts)
+
+    async def _update_knowledge(self) -> str:
+        if self.knowledge_indexer is None:
+            return "Knowledge base not initialized. Run 'codaicli index' first."
+
+        await self.knowledge_indexer.refresh_stale()
+        return "Knowledge base refreshed."
