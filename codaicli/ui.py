@@ -42,6 +42,7 @@ class UI:
             "- \"Run the tests and fix any failures\"\n\n"
             "Commands:\n"
             "- [bold]model <provider/model>[/bold] - Switch model (e.g. openai/gpt-4o)\n"
+            "- [bold]index[/bold] - Generate/refresh project knowledge base\n"
             "- [bold]new[/bold] - Clear conversation history\n"
             "- [bold]help[/bold] - Show help\n"
             "- [bold]clear[/bold] - Clear screen\n"
@@ -58,6 +59,7 @@ class UI:
 
 ## Commands
 - `model <provider/model>` - Switch model (e.g. `model openai/gpt-4o`, `model ollama/llama3`)
+- `index` - Generate/refresh project knowledge base
 - `new` - Clear conversation history
 - `help` - Show this help
 - `clear` - Clear screen
@@ -74,6 +76,7 @@ class UI:
 ## Features
 - Agentic multi-step task execution
 - 100+ LLM providers via LiteLLM (OpenAI, Anthropic, Gemini, Ollama, Groq, Mistral, ...)
+- Self-documenting knowledge base (run `index` to generate)
 - MCP server integration for external tools
 - Streaming responses with real-time tool execution
 - File reading, writing, editing, and deletion (with confirmation)

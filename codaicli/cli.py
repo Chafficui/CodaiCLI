@@ -328,7 +328,9 @@ async def _interactive_mode():
                         temperature=config.get("temperature", 0.2),
                         max_tokens=config.get("max_tokens", 4096),
                     )
-                    ui.console.print(f"[green]Switched to {new_model}[/green]")
+                    config.set("model", new_model)
+                    config.save()
+                    ui.console.print(f"[green]Switched to {new_model} (saved)[/green]")
                 else:
                     ui.console.print(f"[dim]Current model: {agent.provider.model}[/dim]")
                 continue
