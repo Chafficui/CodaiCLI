@@ -43,3 +43,7 @@ class Config:
     def set(self, key, value):
         """Set configuration value."""
         self.config[key] = value
+
+    def set_api_key(self, provider: str, key: str):
+        """Set API key for a provider (legacy compat)."""
+        self.set(f"{provider}_api_key", key)

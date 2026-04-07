@@ -1,19 +1,25 @@
 """UI components for CodaiCLI."""
 
+from __future__ import annotations
+
+import json
 import os
 import re
 from pathlib import Path
+
 from rich.console import Console
-from rich.panel import Panel
 from rich.markdown import Markdown
-from rich.syntax import Syntax
-from rich.prompt import Prompt, Confirm
+from rich.panel import Panel
 from rich.progress import Progress
+from rich.prompt import Confirm, Prompt
+from rich.syntax import Syntax
+
+from codaicli.types import ToolCall, ToolResult
 
 
 class UI:
     """Manages UI components and output formatting."""
-    
+
     def __init__(self):
         """Initialize UI components."""
         self.console = Console()
@@ -22,24 +28,27 @@ class UI:
         """Clear the console."""
         os.system('cls' if os.name == 'nt' else 'clear')
     
-    def show_welcome(self, project_path):
+    def show_welcome(self, project_path, model: str = ""):
         """Show welcome message."""
         self.clear()
+        model_line = f"\nModel: [cyan]{model}[/cyan]" if model else ""
         self.console.print(Panel.fit(
-            "[bold blue]CodaiCLI[/bold blue] - [italic]AI-powered CLI assistant for code projects[/italic]\n\n"
-            f"Project: [green]{project_path}[/green]\n\n"
+            "[bold blue]CodaiCLI[/bold blue] - [italic]AI-powered agentic CLI for code projects[/italic]\n\n"
+            f"Project: [green]{project_path}[/green]"
+            f"{model_line}\n\n"
             "Type your query in natural language. For example:\n"
             "- \"What does this code do?\"\n"
-            "- \"How can I optimize this function?\"\n"
-            "- \"Create a new config file\"\n\n"
+            "- \"Add error handling to function X\"\n"
+            "- \"Run the tests and fix any failures\"\n\n"
             "Commands:\n"
-            "- [bold]use openai/gemini/claude[/bold] - Switch AI provider\n"
+            "- [bold]model <provider/model>[/bold] - Switch model (e.g. openai/gpt-4o)\n"
+            "- [bold]new[/bold] - Clear conversation history\n"
             "- [bold]help[/bold] - Show help\n"
             "- [bold]clear[/bold] - Clear screen\n"
             "- [bold]exit[/bold] - Exit CodaiCLI",
             title="Welcome",
             border_style="blue",
-            padding=(1, 2)
+            padding=(1, 2),
         ))
     
     def show_help(self):
@@ -48,51 +57,36 @@ class UI:
 # CodaiCLI Help
 
 ## Commands
-- `use openai/gemini/claude` - Switch AI provider
+- `model <provider/model>` - Switch model (e.g. `model openai/gpt-4o`, `model ollama/llama3`)
+- `new` - Clear conversation history
 - `help` - Show this help
 - `clear` - Clear screen
 - `exit`, `quit`, `q` - Exit CodaiCLI
 
 ## Query Examples
 - "What does this code do?"
-- "How can I optimize this function?"
-- "Find security vulnerabilities in my code"
-- "Create a new config file"
-- "Add error handling to function X"
+- "Find and fix the bug in the login function"
+- "Add tests for the user module"
+- "Run the tests and fix any failures"
 - "Refactor this class to use dependency injection"
-- "How can I improve the performance of this algorithm?"
-- "Initialize a new git repository"
+- "Create a new config file for the database"
 
 ## Features
-- AI-powered code analysis and improvements
-- File creation, modification, and deletion
-- Command execution (with confirmation)
-- Support for multiple AI providers
+- Agentic multi-step task execution
+- 100+ LLM providers via LiteLLM (OpenAI, Anthropic, Gemini, Ollama, Groq, Mistral, ...)
+- MCP server integration for external tools
+- Streaming responses with real-time tool execution
+- File reading, writing, editing, and deletion (with confirmation)
+- Shell command execution (with confirmation)
+- Conversation memory within a session
 
-## .codaiignore
-CodaiCLI uses a `.codaiignore` file similar to `.gitignore` to specify files and directories to ignore.
-You can create this file in your project root with patterns like:
-
-```
-# Comment
-node_modules/
-*.log
-/dist
-build/           # Trailing slash matches directories only
-!important.log   # Include this file even if it matches previous patterns
-```
-
-- Lines starting with # are comments
-- Blank lines are ignored
-- Leading and trailing spaces are ignored
-- Add ! to negate a pattern
-- * matches any string except /
-- ? matches any single character except /
-- ** matches any number of directories
-- / at the beginning matches from the repository root
-- / at the end matches directories only
+## Configuration
+- Config file: `~/.codaicli/config.json`
+- MCP servers: `~/.codaicli/mcp_servers.json`
+- API keys can be set via environment variables (OPENAI_API_KEY, ANTHROPIC_API_KEY, etc.)
+- Run `codaicli configure` for interactive setup
 """
-        
+
         self.console.print(Markdown(help_text))
     
     def get_input(self):
@@ -188,3 +182,141 @@ build/           # Trailing slash matches directories only
         ))
         
         return Confirm.ask("Execute this command?")
+
+    # --- Agent loop UI methods ---
+
+    def stream_text(self, text: str):
+        """Print streaming text incrementally."""
+        self.console.print(text, end="", highlight=False)
+
+    def show_tool_call(self, tool_call: ToolCall):
+        """Display a compact tool call notification."""
+        args_summary = _summarize_args(tool_call)
+        style = "red" if tool_call.name in ("run_command", "delete_file") else "yellow"
+        self.console.print(
+            f"  [{style}]>[/{style}] [bold]{tool_call.name}[/bold]  [dim]{args_summary}[/dim]"
+        )
+
+    def show_tool_result(self, result: ToolResult):
+        """Display a brief tool result summary."""
+        if result.is_error:
+            # Show error in red
+            truncated = result.content[:200]
+            self.console.print(f"  [red]x {result.name}[/red]  [dim]{truncated}[/dim]")
+        else:
+            # Show brief success summary
+            summary = _result_summary(result)
+            self.console.print(f"  [green]✓ {result.name}[/green]  [dim]{summary}[/dim]")
+
+    async def confirm_tool_call(self, tool_call: ToolCall) -> bool:
+        """Confirm a destructive tool call. Shows details appropriate to the tool type."""
+        args = tool_call.arguments
+
+        if tool_call.name == "edit_file":
+            self.console.print(Panel(
+                f"[bold]Edit:[/bold] [green]{args.get('path', '?')}[/green]\n"
+                f"[red]- {_truncate(args.get('old_text', ''), 200)}[/red]\n"
+                f"[green]+ {_truncate(args.get('new_text', ''), 200)}[/green]",
+                title="Confirm Edit",
+                border_style="yellow",
+            ))
+        elif tool_call.name == "write_file":
+            content = args.get("content", "")
+            line_count = content.count("\n") + 1
+            self.console.print(Panel(
+                f"[bold]Write:[/bold] [green]{args.get('path', '?')}[/green] ({line_count} lines)",
+                title="Confirm Write",
+                border_style="yellow",
+            ))
+        elif tool_call.name == "run_command":
+            self.console.print(Panel(
+                f"[bold]Command:[/bold] [green]{args.get('command', '?')}[/green]",
+                title="Confirm Command",
+                border_style="red",
+            ))
+        elif tool_call.name == "delete_file":
+            self.console.print(Panel(
+                f"[bold red]Delete:[/bold red] [green]{args.get('path', '?')}[/green]",
+                title="Confirm Delete",
+                border_style="red",
+            ))
+        else:
+            # Generic MCP or unknown tool
+            args_display = json.dumps(args, indent=2)[:500]
+            self.console.print(Panel(
+                f"[bold]{tool_call.name}[/bold]\n{args_display}",
+                title="Confirm Tool",
+                border_style="yellow",
+            ))
+
+        return Confirm.ask("Allow?", default=True)
+
+    def show_usage(self, usage: dict[str, int] | None):
+        """Display token usage."""
+        if usage:
+            input_t = usage.get("input_tokens", 0)
+            output_t = usage.get("output_tokens", 0)
+            self.console.print(
+                f"[dim]tokens: {_format_count(input_t)} in / {_format_count(output_t)} out[/dim]"
+            )
+
+
+def _summarize_args(tool_call: ToolCall) -> str:
+    """Create a brief summary of tool call arguments."""
+    args = tool_call.arguments
+    name = tool_call.name
+
+    if name in ("read_file", "write_file", "edit_file", "delete_file"):
+        return args.get("path", "?")
+    if name == "list_files":
+        path = args.get("path", ".")
+        pattern = args.get("pattern", "")
+        return f"{path} {pattern}".strip()
+    if name == "search_files":
+        return f"'{args.get('pattern', '?')}'"
+    if name == "run_command":
+        return _truncate(args.get("command", "?"), 60)
+
+    # Generic
+    return _truncate(json.dumps(args), 60)
+
+
+def _result_summary(result: ToolResult) -> str:
+    """Create a brief summary of a tool result."""
+    content = result.content
+    lines = content.count("\n")
+
+    if result.name == "read_file":
+        return f"{lines + 1} lines"
+    if result.name in ("write_file", "delete_file"):
+        return content.splitlines()[0] if content else ""
+    if result.name == "edit_file":
+        return content.splitlines()[0] if content else ""
+    if result.name == "list_files":
+        return f"{lines + 1} entries"
+    if result.name == "search_files":
+        if "No matches" in content:
+            return "no matches"
+        return f"{min(lines + 1, 50)} matches"
+    if result.name == "run_command":
+        # Show exit code if present
+        for line in reversed(content.splitlines()):
+            if line.startswith("Exit code:"):
+                return line
+        return f"{lines + 1} lines output"
+
+    return _truncate(content, 60)
+
+
+def _truncate(s: str, max_len: int) -> str:
+    """Truncate string with ellipsis."""
+    if len(s) <= max_len:
+        return s
+    return s[: max_len - 3] + "..."
+
+
+def _format_count(n: int) -> str:
+    """Format a number compactly (e.g. 1234 -> 1.2k)."""
+    if n < 1000:
+        return str(n)
+    return f"{n / 1000:.1f}k"

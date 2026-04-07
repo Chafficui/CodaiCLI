@@ -1,20 +1,18 @@
 #!/usr/bin/env python3
-"""
-CodaiCLI - AI-powered CLI assistant for code projects.
-Main CLI entry point.
-"""
+"""CodaiCLI - AI-powered agentic CLI assistant for code projects."""
 
+from __future__ import annotations
+
+import asyncio
+import json
 import os
+
 import click
 from rich.console import Console
-from rich.prompt import Prompt
 from rich.panel import Panel
-from rich.progress import Progress, SpinnerColumn, TextColumn
-import time
+from rich.prompt import Prompt
 
 from codaicli.config import Config
-from codaicli.file_manager import FileManager
-from codaicli.ai_manager import AIManager
 from codaicli.ui import UI
 
 
@@ -22,353 +20,263 @@ from codaicli.ui import UI
 @click.version_option()
 @click.pass_context
 def cli(ctx):
-    """CodaiCLI - AI-powered CLI assistant for code projects."""
+    """CodaiCLI - AI-powered agentic CLI assistant for code projects."""
     if ctx.invoked_subcommand is None:
-        # Main interactive mode
         interactive_mode()
 
 
 @cli.command()
-@click.option('--view', is_flag=True, help='View current configuration')
-@click.option('--reset', is_flag=True, help='Reset configuration to defaults')
-@click.option('--profile', help='Configuration profile to use')
-def configure(view, reset, profile):
-    """Configure API keys and settings."""
+@click.option("--view", is_flag=True, help="View current configuration")
+@click.option("--reset", is_flag=True, help="Reset configuration to defaults")
+def configure(view, reset):
+    """Configure model, API keys, and settings."""
     console = Console()
     config = Config()
-    
-    # Handle view flag
+
     if view:
         _show_configuration(console, config)
         return
-    
-    # Handle reset flag
+
     if reset:
-        if Prompt.ask("Are you sure you want to reset all configuration?", choices=["y", "n"]) == "y":
+        if Prompt.ask("Reset all configuration?", choices=["y", "n"]) == "y":
             config.config = {}
             config.save()
-            console.print("[green]Configuration reset to defaults![/green]")
+            console.print("[green]Configuration reset.[/green]")
         return
-    
-    # Handle profile
-    if profile:
-        config.set("current_profile", profile)
-    
-    console.print(Panel.fit(
-        "[bold blue]CodaiCLI Configuration[/bold blue]\n\n"
-        "Select which settings you want to configure. Leave blank to keep current values."
-    ))
-    
-    # Configuration sections with descriptions
+
+    console.print(
+        Panel.fit(
+            "[bold blue]CodaiCLI Configuration[/bold blue]\n\n"
+            "Configure your model and API settings."
+        )
+    )
+
     sections = [
-        ("Provider Settings", _configure_provider, "Configure default AI provider"),
-        ("API Keys", _configure_api_keys, "Set up API keys for different providers"),
-        ("Model Settings", _configure_models, "Select models for each provider"),
-        ("Advanced Settings", _configure_advanced, "Configure advanced options like tokens and temperature")
+        ("Model", _configure_model, "Set the LLM model (e.g. openai/gpt-4o)"),
+        ("API Key", _configure_api_key, "Set API key for the active provider"),
+        ("API Base URL", _configure_api_base, "Set custom API base (for Ollama, etc.)"),
+        ("Advanced", _configure_advanced, "Max tokens, temperature"),
     ]
-    
+
     while True:
-        # Show current configuration
         _show_configuration(console, config)
-        
-        # Show menu
+
         console.print("\n[bold cyan]Configuration Menu[/bold cyan]")
         for i, (name, _, desc) in enumerate(sections, 1):
             console.print(f"{i}. {name} - {desc}")
-        console.print("5. Save and Exit")
-        console.print("6. Exit without saving")
-        
-        # Get user choice
-        choice = Prompt.ask(
-            "\nSelect an option",
-            choices=[str(i) for i in range(1, 7)],
-            default="5"
-        )
-        
-        if choice == "5":
-            try:
-                config.save()
-                console.print("\n[green]Configuration saved successfully![/green]")
-            except Exception as e:
-                console.print(f"\n[red]Error saving configuration: {str(e)}[/red]")
+        console.print(f"{len(sections) + 1}. Save and Exit")
+        console.print(f"{len(sections) + 2}. Exit without saving")
+
+        choices = [str(i) for i in range(1, len(sections) + 3)]
+        choice = Prompt.ask("\nSelect an option", choices=choices, default=str(len(sections) + 1))
+
+        if choice == str(len(sections) + 1):
+            config.save()
+            console.print("\n[green]Configuration saved![/green]")
             break
-        elif choice == "6":
-            if Prompt.ask("Are you sure you want to exit without saving?", choices=["y", "n"]) == "y":
+        elif choice == str(len(sections) + 2):
+            if Prompt.ask("Exit without saving?", choices=["y", "n"]) == "y":
                 break
-            continue
         else:
-            # Run the selected configuration function
-            section_name, section_func, _ = sections[int(choice) - 1]
-            console.print(f"\n[bold cyan]{section_name}[/bold cyan]")
-            section_func(console, config)
-            console.print("\n[green]Section configured successfully![/green]")
+            name, func, _ = sections[int(choice) - 1]
+            console.print(f"\n[bold cyan]{name}[/bold cyan]")
+            func(console, config)
 
-def _show_configuration(console, config):
-    """Display current configuration in a formatted way."""
-    console.print(Panel.fit(
-        "[bold blue]Current Configuration[/bold blue]"
-    ))
-    
-    # Provider settings
-    console.print("\n[bold cyan]Provider Settings[/bold cyan]")
-    console.print(f"Default Provider: {config.get('default_provider', 'Not set')}")
-    
-    # API Keys
-    console.print("\n[bold cyan]API Keys[/bold cyan]")
-    for provider in ["openai", "gemini", "claude"]:
-        key = config.get(f"{provider}_api_key", "")
-        masked_key = "•" * 8 if key else "Not set"
-        console.print(f"{provider.title()}: {masked_key}")
-    
-    # Model settings
-    console.print("\n[bold cyan]Model Settings[/bold cyan]")
-    for provider in ["openai", "gemini", "claude"]:
-        model = config.get(f"{provider}_model", "Not set")
-        console.print(f"{provider.title()}: {model}")
-    
-    # Advanced settings
-    console.print("\n[bold cyan]Advanced Settings[/bold cyan]")
-    console.print(f"Current Profile: {config.get('current_profile', 'default')}")
-    console.print(f"Max Tokens: {config.get('max_tokens', '4000')}")
-    console.print(f"Temperature: {config.get('temperature', '0.2')}")
 
-def _configure_provider(console, config):
-    """Configure provider settings."""
-    providers = ["openai", "gemini", "claude"]
-    provider = Prompt.ask(
-        "Select default AI provider",
-        choices=providers,
-        default=config.get("default_provider", "openai")
+def _show_configuration(console: Console, config: Config):
+    """Display current configuration."""
+    console.print(Panel.fit("[bold blue]Current Configuration[/bold blue]"))
+    console.print(f"\n[bold cyan]Model:[/bold cyan] {config.get('model', 'Not set')}")
+
+    api_key = config.get("api_key", "")
+    console.print(f"[bold cyan]API Key:[/bold cyan] {'••••••••' if api_key else 'Not set (using env vars)'}")
+
+    api_base = config.get("api_base", "")
+    if api_base:
+        console.print(f"[bold cyan]API Base:[/bold cyan] {api_base}")
+
+    console.print(f"[bold cyan]Max Tokens:[/bold cyan] {config.get('max_tokens', 4096)}")
+    console.print(f"[bold cyan]Temperature:[/bold cyan] {config.get('temperature', 0.2)}")
+
+
+def _configure_model(console: Console, config: Config):
+    """Configure the LLM model."""
+    console.print(
+        "\nUse litellm format: [bold]provider/model[/bold]"
+        "\nExamples: openai/gpt-4o, anthropic/claude-sonnet-4-20250514, "
+        "ollama/llama3, groq/mixtral-8x7b-32768"
     )
-    config.set("default_provider", provider)
-
-def _configure_api_keys(console, config):
-    """Configure API keys for all providers."""
-    console.print("\n[bold]API Key Configuration[/bold]")
-    console.print("You'll need API keys for the providers you want to use.")
-    console.print("\nGet your API keys from:")
-    console.print("- OpenAI: [link=https://platform.openai.com/api-keys]https://platform.openai.com/api-keys[/link]")
-    console.print("- Google AI Studio: [link=https://makersuite.google.com/app/apikey]https://makersuite.google.com/app/apikey[/link]")
-    console.print("- Anthropic: [link=https://console.anthropic.com/settings/keys]https://console.anthropic.com/settings/keys[/link]")
-    
-    # OpenAI
-    if Prompt.ask("\nConfigure OpenAI API key?", choices=["y", "n"], default="y") == "y":
-        api_key = Prompt.ask("Enter your OpenAI API key", password=True)
-        if api_key:
-            config.set_api_key("openai", api_key)
-            console.print("[green]OpenAI API key configured successfully![/green]")
-    
-    # Google Gemini
-    if Prompt.ask("\nConfigure Google Gemini API key?", choices=["y", "n"], default="y") == "y":
-        api_key = Prompt.ask("Enter your Google AI Studio API key", password=True)
-        if api_key:
-            config.set_api_key("gemini", api_key)
-            console.print("[green]Google Gemini API key configured successfully![/green]")
-    
-    # Anthropic Claude
-    if Prompt.ask("\nConfigure Anthropic Claude API key?", choices=["y", "n"], default="y") == "y":
-        api_key = Prompt.ask("Enter your Anthropic API key", password=True)
-        if api_key:
-            config.set_api_key("claude", api_key)
-            console.print("[green]Anthropic Claude API key configured successfully![/green]")
-    
-    config.save()
-    console.print("\n[green]API key configuration completed![/green]")
-
-def _configure_models(console, config):
-    """Configure model settings."""
-    # Show current models
-    console.print("\n[bold]Current Models:[/bold]")
-    for provider in ["openai", "gemini", "claude"]:
-        model = config.get(f"{provider}_model", "Not set")
-        console.print(f"{provider.title()}: {model}")
-    
-    # Ask which provider's model to update
-    provider = Prompt.ask(
-        "\nWhich provider's model do you want to update?",
-        choices=["openai", "gemini", "claude", "none"],
-        default="none"
+    model = Prompt.ask(
+        "Model",
+        default=config.get("model", "anthropic/claude-sonnet-4-20250514"),
     )
-    
-    if provider == "openai":
-        # Allow any model name for OpenAI
-        model = Prompt.ask(
-            "Enter OpenAI model name",
-            default=config.get("openai_model", "o4-mini")
-        )
-        config.set("openai_model", model)
-    
-    elif provider == "gemini":
-        # Allow any model name for Gemini
-        model = Prompt.ask(
-            "Enter Gemini model name",
-            default=config.get("gemini_model", "gemini-2.5-flash-preview-04-17")
-        )
-        config.set("gemini_model", model)
-    
-    elif provider == "claude":
-        # Allow any model name for Claude
-        model = Prompt.ask(
-            "Enter Claude model name",
-            default=config.get("claude_model", "claude-3-7-sonnet-latest")
-        )
-        config.set("claude_model", model)
+    config.set("model", model)
 
-def _configure_advanced(console, config):
+
+def _configure_api_key(console: Console, config: Config):
+    """Configure the API key."""
+    console.print(
+        "\nSet the API key for your provider. "
+        "You can also use environment variables:\n"
+        "  OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY, etc."
+    )
+    api_key = Prompt.ask("API key (leave empty to use env vars)", password=True, default="")
+    config.set("api_key", api_key if api_key else None)
+
+
+def _configure_api_base(console: Console, config: Config):
+    """Configure custom API base URL."""
+    console.print(
+        "\nSet a custom API base URL (for Ollama, local models, etc.).\n"
+        "  Ollama default: http://localhost:11434"
+    )
+    api_base = Prompt.ask(
+        "API base URL (leave empty for default)",
+        default=config.get("api_base", ""),
+    )
+    config.set("api_base", api_base if api_base else None)
+
+
+def _configure_advanced(console: Console, config: Config):
     """Configure advanced settings."""
-    # Show current advanced settings
-    console.print("\n[bold]Current Advanced Settings:[/bold]")
-    console.print(f"Max Tokens: {config.get('max_tokens', '4000')}")
-    console.print(f"Temperature: {config.get('temperature', '0.2')}")
-    console.print(f"Profile: {config.get('current_profile', 'default')}")
-    
-    # Ask which setting to update
-    setting = Prompt.ask(
-        "\nWhich setting do you want to update?",
-        choices=["max_tokens", "temperature", "profile", "none"],
-        default="none"
+    max_tokens = Prompt.ask(
+        "Max tokens per response",
+        default=str(config.get("max_tokens", 4096)),
     )
-    
-    if setting == "max_tokens":
-        max_tokens = Prompt.ask(
-            "Max tokens per response",
-            default=str(config.get("max_tokens", "4000"))
-        )
-        try:
-            max_tokens = int(max_tokens)
-            config.set("max_tokens", max_tokens)
-        except ValueError:
-            console.print("[yellow]Invalid max tokens value, using default[/yellow]")
-    
-    elif setting == "temperature":
-        temperature = Prompt.ask(
-            "Temperature (0.0 to 1.0)",
-            default=str(config.get("temperature", "0.2"))
-        )
-        try:
-            temperature = float(temperature)
-            if 0 <= temperature <= 1:
-                config.set("temperature", temperature)
-            else:
-                console.print("[yellow]Temperature must be between 0 and 1, using default[/yellow]")
-        except ValueError:
-            console.print("[yellow]Invalid temperature value, using default[/yellow]")
-    
-    elif setting == "profile":
-        profile = Prompt.ask(
-            "Configuration profile name",
-            default=config.get("current_profile", "default")
-        )
-        config.set("current_profile", profile)
+    try:
+        config.set("max_tokens", int(max_tokens))
+    except ValueError:
+        console.print("[yellow]Invalid value, keeping current.[/yellow]")
+
+    temperature = Prompt.ask(
+        "Temperature (0.0 to 1.0)",
+        default=str(config.get("temperature", 0.2)),
+    )
+    try:
+        temp = float(temperature)
+        if 0 <= temp <= 1:
+            config.set("temperature", temp)
+        else:
+            console.print("[yellow]Must be 0-1, keeping current.[/yellow]")
+    except ValueError:
+        console.print("[yellow]Invalid value, keeping current.[/yellow]")
+
+
+async def _interactive_mode():
+    """Async main interactive loop."""
+    ui = UI()
+    config = Config()
+
+    project_path = os.getcwd()
+
+    # Initialize provider
+    model = config.get("model", "anthropic/claude-sonnet-4-20250514")
+
+    from codaicli.file_manager import FileManager
+    from codaicli.provider import Provider
+    from codaicli.tools import ToolRegistry
+
+    file_manager = FileManager(project_path)
+    tool_registry = ToolRegistry(file_manager, project_path)
+
+    provider = Provider(
+        model=model,
+        api_key=config.get("api_key"),
+        api_base=config.get("api_base"),
+        temperature=config.get("temperature", 0.2),
+        max_tokens=config.get("max_tokens", 4096),
+    )
+
+    # MCP (optional)
+    mcp_manager = None
+    try:
+        from codaicli.mcp_client import MCPManager
+
+        mcp_manager = MCPManager()
+        mcp_config = mcp_manager.load_config()
+        for name, server_config in mcp_config.get("mcpServers", {}).items():
+            try:
+                await mcp_manager.connect(name, server_config)
+                ui.console.print(f"  [dim]MCP: connected to {name}[/dim]")
+            except Exception as e:
+                ui.console.print(f"  [dim yellow]MCP: failed to connect to {name}: {e}[/dim yellow]")
+    except ImportError:
+        pass  # MCP not installed, that's fine
+
+    from codaicli.agent import Agent
+
+    agent = Agent(
+        provider=provider,
+        tool_registry=tool_registry,
+        mcp_manager=mcp_manager,
+        on_text=ui.stream_text,
+        on_tool_call=ui.show_tool_call,
+        on_tool_result=ui.show_tool_result,
+        confirm_tool=ui.confirm_tool_call,
+    )
+
+    ui.show_welcome(project_path, model=model)
+
+    try:
+        while True:
+            query = ui.get_input()
+
+            if not query.strip():
+                continue
+
+            lower = query.lower().strip()
+
+            if lower in ("exit", "quit", "q"):
+                ui.console.print("[bold blue]Goodbye![/bold blue]")
+                break
+
+            if lower in ("clear", "cls"):
+                ui.clear()
+                continue
+
+            if lower == "help":
+                ui.show_help()
+                continue
+
+            if lower == "new":
+                agent.clear_history()
+                ui.console.print("[green]Conversation cleared.[/green]")
+                continue
+
+            if lower.startswith("model "):
+                new_model = query[6:].strip()
+                if new_model:
+                    agent.provider = Provider(
+                        model=new_model,
+                        api_key=config.get("api_key"),
+                        api_base=config.get("api_base"),
+                        temperature=config.get("temperature", 0.2),
+                        max_tokens=config.get("max_tokens", 4096),
+                    )
+                    ui.console.print(f"[green]Switched to {new_model}[/green]")
+                else:
+                    ui.console.print(f"[dim]Current model: {agent.provider.model}[/dim]")
+                continue
+
+            # Run the agent
+            try:
+                agent.trim_history()
+                await agent.run(query)
+                ui.console.print()  # newline after streaming
+            except KeyboardInterrupt:
+                ui.console.print("\n[yellow]Interrupted.[/yellow]")
+            except Exception as e:
+                ui.console.print(f"[bold red]Error:[/bold red] {e}")
+
+    finally:
+        # Clean shutdown
+        if mcp_manager:
+            await mcp_manager.disconnect_all()
 
 
 def interactive_mode():
-    """Run the main interactive mode."""
-    ui = UI()
-    config = Config()
-    
-    # Check if API keys are configured
-    if not any([
-        config.get("openai_api_key"),
-        config.get("gemini_api_key"),
-        config.get("claude_api_key")
-    ]):
-        ui.console.print(
-            "[yellow]No API keys configured. Running configuration wizard...[/yellow]"
-        )
-        configure()
-    
-    # Get project path
-    project_path = os.getcwd()
-    file_manager = FileManager(project_path)
-    
-    # Initialize AI manager with the default provider
-    default_provider = config.get("default_provider", "openai")
-    ai_manager = AIManager(config, default_provider)
-    
-    ui.show_welcome(project_path)
-    
-    while True:
-        # Get user input
-        query = ui.get_input()
-        
-        if query.lower() in ["exit", "quit", "q"]:
-            ui.console.print("[bold blue]Goodbye![/bold blue]")
-            break
-            
-        if query.lower() in ["clear", "cls"]:
-            ui.clear()
-            continue
-            
-        if query.lower() == "help":
-            ui.show_help()
-            continue
-            
-        if query.lower().startswith("use "):
-            # Change AI provider
-            provider = query.lower().split(" ")[1].strip()
-            if provider in ["openai", "gemini", "claude"]:
-                if ai_manager.set_provider(provider):
-                    ui.console.print(f"[green]Switched to {provider}[/green]")
-                else:
-                    ui.console.print(
-                        f"[red]Failed to switch to {provider}. API key not configured.[/red]"
-                    )
-            else:
-                ui.console.print("[red]Unknown provider. Use 'openai', 'gemini', or 'claude'[/red]")
-            continue
-        
-        # Process the query
-        try:
-            # Use progress spinner for loading
-            with Progress(
-                SpinnerColumn(),
-                TextColumn("[bold blue]{task.description}[/bold blue]"),
-                transient=True
-            ) as progress:
-                # Loading files task
-                file_task = progress.add_task("Loading project files...", total=1)
-                files = file_manager.load_files()
-                progress.update(file_task, completed=1)
-                
-                # AI processing task
-                ai_task = progress.add_task(f"Processing with {ai_manager.provider}...", total=1)
-                start_time = time.time()
-                response = ai_manager.process_query(query, files)
-                elapsed = time.time() - start_time
-                progress.update(ai_task, completed=1)
-            
-            # Process and display the response
-            ui.show_response(response, elapsed)
-            
-            # Handle potential actions in the response
-            actions = ai_manager.extract_actions(response)
-            
-            if actions:
-                for action in actions:
-                    if action["type"] == "diff":
-                        if ui.confirm_diff(action["file"], action["diff"]):
-                            file_manager.apply_diff(action["file"], action["diff"])
-                            ui.console.print(f"[green]Applied changes to {action['file']}[/green]")
-                    
-                    elif action["type"] == "create":
-                        if ui.confirm_create(action["file"], action["content"]):
-                            file_manager.create_file(action["file"], action["content"])
-                            ui.console.print(f"[green]Created file {action['file']}[/green]")
-                    
-                    elif action["type"] == "delete":
-                        if ui.confirm_delete(action["file"]):
-                            file_manager.delete_file(action["file"])
-                            ui.console.print(f"[green]Deleted file {action['file']}[/green]")
-                    
-                    elif action["type"] == "run":
-                        if ui.confirm_run(action["command"]):
-                            result = file_manager.run_command(action["command"])
-                            ui.console.print(f"[bold]Command output:[/bold]")
-                            ui.console.print(result)
-            
-        except Exception as e:
-            ui.console.print(f"[bold red]Error:[/bold red] {str(e)}")
+    """Entry point for interactive mode (sync wrapper)."""
+    asyncio.run(_interactive_mode())
 
 
 if __name__ == "__main__":
