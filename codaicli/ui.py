@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import readline  # noqa: F401 — enables input() history (up/down arrows)
 from pathlib import Path
 
 from rich.console import Console
@@ -93,9 +94,12 @@ class UI:
         self.console.print(Markdown(help_text))
     
     def get_input(self):
-        """Get user input."""
+        """Get user input with readline history support (up/down arrows)."""
         self.console.print()
-        return Prompt.ask("[bold blue]>[/bold blue]")
+        try:
+            return input("\033[1;34m>\033[0m: ")
+        except EOFError:
+            return "exit"
     
     def show_loading(self, message="Working..."):
         """Show a loading indicator."""
